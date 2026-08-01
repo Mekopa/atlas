@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
-import AgentChat from "./AgentChat";
+import PaneChat from "./PaneChat";
 import { sendToAgent, type Agent, type Tab } from "../lib/agentService";
-import { acpAgentIdForHerdrName } from "../lib/acpService";
 import { useHerdr } from "../lib/herdrStore";
 
 // SpacesView — the SPACES tab (herdr-sync path). Shows herdr's structure layer
 // as a hierarchy (workspace → tab → pane, each with its detected agent + live
-// status). Opening a pane shows either a REAL chat interface (AgentChat via
-// ACP, when the agent is ACP-capable) or the raw terminal output. Structure and
-// status arrive via push events (herdrStore); pane output is re-read on demand.
+// status). Opening a pane shows the RUNNING conversation as a chat (PaneChat:
+// full history + realtime, sends continue the same pane), with a raw Terminal
+// toggle for the exact frame.
 
 const STATUS_COLOR: Record<string, string> = {
   working: "#f5a623",
@@ -33,10 +32,6 @@ export default function SpacesView() {
   const [error, setError] = useState("");
   const selectedRef = useRef<Agent | null>(null);
   selectedRef.current = selected;
-
-  // ACP capability decides the default view for the opened chat.
-  const acpId = selected ? acpAgentIdForHerdrName(selected.agent) : undefined;
-  const cwd = selected?.cwd ?? "/Users/mekopa";
 
   // Re-read the selected pane's output (for terminal view + fallback).
   const readSelected = useCallback(async () => {
@@ -159,14 +154,12 @@ export default function SpacesView() {
                   {selected.workspace_id.slice(-6)} · {selected.pane_id}
                 </span>
                 <span className="view-toggle">
-                  {acpId && (
-                    <button
-                      className={mode === "chat" ? "active" : ""}
-                      onClick={() => setMode("chat")}
-                    >
-                      Chat
-                    </button>
-                  )}
+                  <button
+                    className={mode === "chat" ? "active" : ""}
+                    onClick={() => setMode("chat")}
+                  >
+                    Chat
+                  </button>
                   <button
                     className={mode === "terminal" ? "active" : ""}
                     onClick={() => setMode("terminal")}
@@ -176,12 +169,13 @@ export default function SpacesView() {
                 </span>
               </div>
 
-              {mode === "chat" && acpId ? (
-                <AgentChat key={selected.pane_id} agentId={acpId} label={selected.agent} cwd={cwd} />
-              ) : mode === "chat" ? (
-                <div className="empty-state">
-                  <p>{selected.agent} isn't ACP-capable — switch to Terminal view.</p>
-                </div>
+              {mode === "chat" ? (
+                <PaneChat
+                  key={selected.pane_id}
+                  paneId={selected.pane_id}
+                  label={selected.agent}
+                  workspaceId={selected.workspace_id}
+                />
               ) : (
                 <>
                   <TerminalPane data={output} />

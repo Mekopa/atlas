@@ -344,6 +344,27 @@ main.container {
   flex-direction: column;
   min-height: 0;
 }
+.pane-chat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.pane-chat-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: #141416;
+}
+.pane-transcript {
+  margin: 0;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #d4d4d8;
+}
 .chat-thread {
   flex: 1;
   overflow-y: auto;
