@@ -98,9 +98,15 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
 
   // Bridge the shell child (EventEmitter stdout + child.write) into the
   // WHATWG streams the ACP SDK expects. stdout carries newline-delimited JSON.
+  // The shell plugin's raw payload arrives as a plain Array at runtime, so
+  // coerce to Uint8Array (the SDK's LineBuffer needs .subarray).
   const releaseOut: Array<() => void> = [];
   let outController: ReadableStreamDefaultController<Uint8Array> | null = null;
-  const onOutData = (d: Uint8Array) => outController?.enqueue(d);
+  const onOutData = (d: unknown) => {
+    const bytes =
+      d instanceof Uint8Array ? d : Uint8Array.from(d as ArrayLike<number>);
+    outController?.enqueue(bytes);
+  };
   const onClose = () => outController?.close();
   const onError = (e: unknown) => outController?.error(String(e));
 
