@@ -84,6 +84,40 @@ write to those files yet; it keeps its own registry of known MCP servers persist
 localStorage (`mcpService.ts`), with add/remove/enable/disable. Wiring to real agent configs is
 a later step; the surface and its data shape are established now.
 
+### D8 — realtime layer: persistent API-socket subscription, not polling
+
+`src-tauri/src/realtime.rs` keeps ONE persistent connection to herdr's public API socket
+(`~/.config/herdr/herdr.sock`) and subscribes via `events.subscribe`. Structure/status events
+are re-emitted to the webview as Tauri events (`herdr:structure`, `herdr:status`,
+`herdr:pane`); the React `herdrStore` refreshes the hierarchy on them.
+
+- herdr does **not** push pane output over the API (a `pane.output_changed` schema exists on
+  main but the runtime loop never emits it), so pane text is still fetched on demand via
+  `readPane`, triggered by pane events with a light 1s fallback poll.
+- **Resilience:** the subscribe request fails wholesale if any tag is unknown. Older herdr
+  (0.6.x, AGPL) rejects `pane.updated`, `pane.moved`, `tab.moved`,
+  `pane.agent_status_changed`; the module probes each tag with a short-lived connection at
+  startup and subscribes only to what the server accepts.
+- Only the **public** API socket is used — never herdr's private TUI client socket
+  (`herdr-client.sock`) and never herdr's code.
+
+### D9 — Spaces view is a herdr hierarchy (workspace → tab → pane)
+
+`SpacesView.tsx` renders herdr's structure layer as a tree — workspaces, each with its tabs,
+each tab with its agent panes + live status dots — fed by `herdrStore`. This is the "what's
+running" shell. The parallel ACP path (`acpService.ts`) is the "what am I talking to"
+intelligence layer (agents, sessions, context-config); the two stay separate backends under
+the same tab shell.
+
+### D10 — herdr binary: Apache-2.0 main build, installed as `~/.local/bin/herdr-dev`
+
+The daily daemon was brew 0.6.10 (AGPL, protocol 13). Atlas targets the Apache-2.0 main build
+(relicense cd5ea1be) which speaks protocol 19 and accepts the newer event tags. Built herdr
+from main → `~/.local/bin/herdr-dev` (Zig 0.15.2 required for vendored libghostty-vt, installed
+at `~/.local/bin/zig`). Swap = edit the launchd plist `dev.herdr.server` to point at
+`herdr-dev` + kickstart. Client and daemon must move together (protocol mismatch otherwise).
+Atlas keeps using whatever daemon owns the socket; it never bundles its own herdr.
+
 ## Tradeoffs considered
 
 - **xterm `<pre>` replacement** — xterm is heavier but correct; a `<pre>` cannot render ANSI.

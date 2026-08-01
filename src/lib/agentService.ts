@@ -27,6 +27,7 @@ export interface Workspace {
   tab_count: number;
   focused: boolean;
   active_tab_id?: string;
+  workspace_id?: string;
 }
 
 export interface Tab {

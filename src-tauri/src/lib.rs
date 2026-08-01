@@ -8,6 +8,8 @@
 use serde::Serialize;
 use std::process::Command;
 
+mod realtime;
+
 #[derive(Serialize)]
 struct HerdrResult {
     ok: bool,
@@ -68,6 +70,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![herdr])
+        .setup(|app| {
+            realtime::start(app.handle().clone());
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

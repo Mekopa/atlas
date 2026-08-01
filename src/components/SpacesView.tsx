@@ -1,17 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
-import {
-  listAgents,
-  listWorkspaces,
-  readPane,
-  sendToAgent,
-  type Agent,
-  type Workspace,
-} from "../lib/agentService";
+import { sendToAgent, type Agent, type Tab } from "../lib/agentService";
+import { useHerdr } from "../lib/herdrStore";
 
-// SpacesView — the SPACES tab (herdr-sync path). Running agent chats and
-// their terminal panes, detach/reattach, prompt send. Polls herdr on an
-// interval; TerminalPane renders live ANSI output via xterm.js.
+// SpacesView — the SPACES tab (herdr-sync path). Shows herdr's structure layer
+// as a hierarchy (workspace → tab → pane, each with its detected agent + live
+// status), and renders the selected pane's output in a real xterm.js terminal.
+// Structure/status updates arrive via push events (herdrStore); pane output is
+// re-read on demand when a pane event fires, with a fallback poll on servers
+// that lack the output push tags.
 
 const STATUS_COLOR: Record<string, string> = {
   working: "#f5a623",
@@ -20,9 +17,12 @@ const STATUS_COLOR: Record<string, string> = {
   idle: "#8a8f98",
 };
 
+function statusDot(status?: string) {
+  return { background: STATUS_COLOR[status ?? ""] ?? "#8a8f98" };
+}
+
 export default function SpacesView() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const { snapshot, fetchPane } = useHerdr();
   const [selected, setSelected] = useState<Agent | null>(null);
   const [output, setOutput] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -30,41 +30,32 @@ export default function SpacesView() {
   const selectedRef = useRef<Agent | null>(null);
   selectedRef.current = selected;
 
-  const refresh = useCallback(async () => {
-    try {
-      const [a, w] = await Promise.all([listAgents(), listWorkspaces()]);
-      setAgents(a);
-      setWorkspaces(w);
-      setError("");
-    } catch (e) {
-      setError(String(e));
-    }
-    // Keep the selected pane live: re-read its output every poll.
+  // Re-read the selected pane's output whenever it changes (push) — and on a
+  // light 1s poll as a fallback for servers without the output push tags.
+  const readSelected = useCallback(async () => {
     const cur = selectedRef.current;
-    if (cur) {
-      try {
-        const text = await readPane(cur.pane_id);
-        setOutput(text);
-      } catch {
-        /* keep last output */
-      }
+    if (!cur) return;
+    try {
+      const text = await fetchPane(cur.pane_id);
+      setOutput(text);
+    } catch {
+      /* keep last output */
     }
-  }, []);
+  }, [fetchPane]);
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 3000);
+    if (!selected) return;
+    readSelected();
+  }, [selected, readSelected, snapshot.rev]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const t = setInterval(readSelected, 1000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [selected, readSelected]);
 
   async function openPane(agent: Agent) {
     setSelected(agent);
-    try {
-      const text = await readPane(agent.pane_id);
-      setOutput(text);
-    } catch (e) {
-      setOutput(`(read failed: ${e})`);
-    }
   }
 
   async function runPrompt() {
@@ -72,17 +63,27 @@ export default function SpacesView() {
     try {
       await sendToAgent(selected.pane_id, prompt.trim());
       setPrompt("");
-      setTimeout(async () => {
-        try {
-          setOutput(await readPane(selected.pane_id));
-        } catch {
-          /* ignore */
-        }
-      }, 800);
+      setTimeout(readSelected, 300);
     } catch (e) {
       setError(String(e));
     }
   }
+
+  // Group agents by workspace → tab for the hierarchy.
+  const tabsByWs = new Map<string, Tab[]>();
+  snapshot.tabs.forEach((t) => {
+    const list = tabsByWs.get(t.workspace_id) ?? [];
+    list.push(t);
+    tabsByWs.set(t.workspace_id, list);
+  });
+  const agentsByWsTab = new Map<string, Map<string, Agent[]>>();
+  snapshot.agents.forEach((a) => {
+    const ws = agentsByWsTab.get(a.workspace_id) ?? new Map();
+    const list = ws.get(a.tab_id) ?? [];
+    list.push(a);
+    ws.set(a.tab_id, list);
+    agentsByWsTab.set(a.workspace_id, ws);
+  });
 
   return (
     <div className="view spaces-view">
@@ -90,24 +91,57 @@ export default function SpacesView() {
 
       <div className="layout">
         <aside className="sidebar">
-          <h2>Agents</h2>
-          <ul className="agent-list">
-            {agents.map((a) => (
-              <li key={a.pane_id}>
-                <button
-                  className={`agent-row ${selected?.pane_id === a.pane_id ? "active" : ""}`}
-                  onClick={() => openPane(a)}
-                >
-                  <span
-                    className="status-dot"
-                    style={{ background: STATUS_COLOR[a.agent_status] ?? "#8a8f98" }}
-                  />
-                  <span className="agent-name">{a.agent}</span>
-                  <span className="agent-status">{a.agent_status}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <h2>Spaces</h2>
+          <div className="hierarchy">
+            {snapshot.workspaces.length === 0 && (
+              <p className="muted pad">No spaces (herdr unreachable?).</p>
+            )}
+            {snapshot.workspaces.map((ws) => {
+              const wsId = ws.workspace_id ?? "";
+              const tabs: Tab[] = tabsByWs.get(wsId) ?? [];
+              const tabAgents = agentsByWsTab.get(wsId) ?? new Map();
+              return (
+                <div key={wsId || ws.number} className="ws-node">
+                  <div className="ws-head">
+                    <span className="ws-name">
+                      {ws.label || `#${ws.number}`}
+                    </span>
+                    <span className="muted">
+                      {tabs.length}t · {ws.pane_count}p
+                    </span>
+                  </div>
+                  {tabs.map((tab) => {
+                    const agents: Agent[] = tabAgents.get(tab.tab_id) ?? [];
+                    return (
+                      <div key={tab.tab_id} className="tab-node">
+                        <div className="tab-head">
+                          <span className="muted">tab {tab.label}</span>
+                        </div>
+                        <ul className="agent-list">
+                          {agents.map((a) => (
+                            <li key={a.pane_id}>
+                              <button
+                                className={`agent-row ${selected?.pane_id === a.pane_id ? "active" : ""}`}
+                                onClick={() => openPane(a)}
+                              >
+                                <span className="status-dot" style={statusDot(a.agent_status)} />
+                                <span className="agent-name">
+                                  {a.agent}
+                                  {a.agent_status ? (
+                                    <span className="agent-status"> · {a.agent_status}</span>
+                                  ) : null}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </aside>
 
         <section className="pane-view">
@@ -141,14 +175,6 @@ export default function SpacesView() {
             </div>
           )}
         </section>
-      </div>
-
-      <div className="ws-strip">
-        {workspaces.map((w) => (
-          <span key={w.number} className="ws-chip">
-            {w.label} <small>({w.pane_count}p)</small>
-          </span>
-        ))}
       </div>
     </div>
   );
