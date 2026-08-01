@@ -5,6 +5,33 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "gemini",
+          "cmd": "gemini",
+          "args": true
+        },
+        {
+          "name": "claude",
+          "cmd": "claude",
+          "args": true
+        },
+        {
+          "name": "goose",
+          "cmd": "goose",
+          "args": true
+        },
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": true
+        }
+      ]
+    },
+    "shell:allow-stdin-write",
+    "shell:allow-kill"
   ]
 }

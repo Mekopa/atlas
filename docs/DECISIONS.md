@@ -42,12 +42,47 @@ once herdr supports it. Cost: ~330KB added to the JS bundle — acceptable for a
 
 ### D4 — polling refresh (3s), not push
 
-`App.tsx` polls `listAgents()` + `listWorkspaces()` every 3s and re-reads the selected pane.
+`SpacesView.tsx` polls `listAgents()` + `listWorkspaces()` every 3s and re-reads the selected pane.
 No event stream yet.
 
 **Why:** the herdr CLI is request/response only; there is no push channel to consume. 3s keeps
 status dots fresh without hammering the daemon. A subscription API or direct socket would
 replace the poll loop later, without touching the rest of the UI.
+
+### D5 — four first-class tab surfaces, each with its own sync path
+
+Atlas is a tabbed GUI, not a single cockpit. `App.tsx` is a thin shell hosting four tabs, each
+its own component with its own backend boundary:
+
+| Tab | Component | Backend | Sync path |
+| --- | --- | --- | --- |
+| Spaces | `SpacesView.tsx` | herdr (pane read/send) | 3s poll via `agentService.ts` |
+| Chat | `ChatView.tsx` | ACP agents (JSON-RPC/stdio) | live stream via `acpService.ts` |
+| Apps | `AppsView.tsx` | Icarus webview apps (registry stub) | — |
+| MCP Hub | `McpHubView.tsx` | local Atlas manifest | `mcpService.ts` (localStorage) |
+
+herdr owns running chats/spaces; ACP is a first-class *parallel* chat backend (claude-code,
+gemini-cli, goose, codex). Apps and MCP are separate surfaces. The shell knows none of the
+backends directly.
+
+### D6 — ACP is a second boundary, `acpService.ts`
+
+ACP (Agent Client Protocol) chat is JSON-RPC over stdio, entirely separate from herdr. Just as
+`agentService.ts` is the only herdr boundary, `acpService.ts` is the only ACP boundary: it
+spawns an ACP-capable binary via `tauri-plugin-shell`, speaks the protocol through the official
+`@agentclientprotocol/sdk`, and exposes a minimal `startChat/prompt/close` surface. The UI never
+sees the SDK or wire format. Replacing either backend only touches its one service file.
+
+Agent binaries are spawned through the shell plugin and scoped in
+`src-tauri/capabilities/default.json` (gemini, claude, goose, codex). Availability is probed
+once with `--version` at first list.
+
+### D7 — MCP Hub uses a local Atlas manifest (first pass)
+
+MCP servers are configured per agent CLI (e.g. claude-code's `~/.claude.json`). Atlas does not
+write to those files yet; it keeps its own registry of known MCP servers persisted in
+localStorage (`mcpService.ts`), with add/remove/enable/disable. Wiring to real agent configs is
+a later step; the surface and its data shape are established now.
 
 ## Tradeoffs considered
 
