@@ -43,6 +43,15 @@ const AGENTS: Omit<AcpAgent, "available">[] = [
   { id: "codex", label: "Codex", binary: "codex", acpArgs: ["--acp"] },
 ];
 
+/**
+ * Maps a herdr agent name (e.g. "claude", "opencode") to an ACP agent id, or
+ * undefined if that agent isn't ACP-capable.
+ */
+export function acpAgentIdForHerdrName(name: string): string | undefined {
+  const found = AGENTS.find((a) => a.id === name);
+  return found?.id;
+}
+
 let availabilityChecked = false;
 let availability: Record<string, boolean> = {};
 

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
+import AgentChat from "./AgentChat";
 import { sendToAgent, type Agent, type Tab } from "../lib/agentService";
+import { acpAgentIdForHerdrName } from "../lib/acpService";
 import { useHerdr } from "../lib/herdrStore";
 
 // SpacesView — the SPACES tab (herdr-sync path). Shows herdr's structure layer
 // as a hierarchy (workspace → tab → pane, each with its detected agent + live
-// status), and renders the selected pane's output in a real xterm.js terminal.
-// Structure/status updates arrive via push events (herdrStore); pane output is
-// re-read on demand when a pane event fires, with a fallback poll on servers
-// that lack the output push tags.
+// status). Opening a pane shows either a REAL chat interface (AgentChat via
+// ACP, when the agent is ACP-capable) or the raw terminal output. Structure and
+// status arrive via push events (herdrStore); pane output is re-read on demand.
 
 const STATUS_COLOR: Record<string, string> = {
   working: "#f5a623",
@@ -21,17 +22,23 @@ function statusDot(status?: string) {
   return { background: STATUS_COLOR[status ?? ""] ?? "#8a8f98" };
 }
 
+type ViewMode = "chat" | "terminal";
+
 export default function SpacesView() {
   const { snapshot, fetchPane } = useHerdr();
   const [selected, setSelected] = useState<Agent | null>(null);
+  const [mode, setMode] = useState<ViewMode>("chat");
   const [output, setOutput] = useState("");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
   const selectedRef = useRef<Agent | null>(null);
   selectedRef.current = selected;
 
-  // Re-read the selected pane's output whenever it changes (push) — and on a
-  // light 1s poll as a fallback for servers without the output push tags.
+  // ACP capability decides the default view for the opened chat.
+  const acpId = selected ? acpAgentIdForHerdrName(selected.agent) : undefined;
+  const cwd = selected?.cwd ?? "/Users/mekopa";
+
+  // Re-read the selected pane's output (for terminal view + fallback).
   const readSelected = useCallback(async () => {
     const cur = selectedRef.current;
     if (!cur) return;
@@ -54,9 +61,10 @@ export default function SpacesView() {
     return () => clearInterval(t);
   }, [selected, readSelected]);
 
-  async function openPane(agent: Agent) {
-    setSelected(agent);
-  }
+  // Reset view mode to chat whenever a new agent is opened.
+  useEffect(() => {
+    setMode("chat");
+  }, [selected?.pane_id]);
 
   async function runPrompt() {
     if (!selected || !prompt.trim()) return;
@@ -103,9 +111,7 @@ export default function SpacesView() {
               return (
                 <div key={wsId || ws.number} className="ws-node">
                   <div className="ws-head">
-                    <span className="ws-name">
-                      {ws.label || `#${ws.number}`}
-                    </span>
+                    <span className="ws-name">{ws.label || `#${ws.number}`}</span>
                     <span className="muted">
                       {tabs.length}t · {ws.pane_count}p
                     </span>
@@ -122,7 +128,7 @@ export default function SpacesView() {
                             <li key={a.pane_id}>
                               <button
                                 className={`agent-row ${selected?.pane_id === a.pane_id ? "active" : ""}`}
-                                onClick={() => openPane(a)}
+                                onClick={() => setSelected(a)}
                               >
                                 <span className="status-dot" style={statusDot(a.agent_status)} />
                                 <span className="agent-name">
@@ -152,26 +158,53 @@ export default function SpacesView() {
                 <span className="muted">
                   {selected.workspace_id.slice(-6)} · {selected.pane_id}
                 </span>
+                <span className="view-toggle">
+                  {acpId && (
+                    <button
+                      className={mode === "chat" ? "active" : ""}
+                      onClick={() => setMode("chat")}
+                    >
+                      Chat
+                    </button>
+                  )}
+                  <button
+                    className={mode === "terminal" ? "active" : ""}
+                    onClick={() => setMode("terminal")}
+                  >
+                    Terminal
+                  </button>
+                </span>
               </div>
-              <TerminalPane data={output} />
-              <form
-                className="prompt-bar"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  runPrompt();
-                }}
-              >
-                <input
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.currentTarget.value)}
-                  placeholder={`send to ${selected.agent}…`}
-                />
-                <button type="submit">Send</button>
-              </form>
+
+              {mode === "chat" && acpId ? (
+                <AgentChat key={selected.pane_id} agentId={acpId} label={selected.agent} cwd={cwd} />
+              ) : mode === "chat" ? (
+                <div className="empty-state">
+                  <p>{selected.agent} isn't ACP-capable — switch to Terminal view.</p>
+                </div>
+              ) : (
+                <>
+                  <TerminalPane data={output} />
+                  <form
+                    className="prompt-bar"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      runPrompt();
+                    }}
+                  >
+                    <input
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.currentTarget.value)}
+                      placeholder={`send to ${selected.agent}…`}
+                    />
+                    <button type="submit">Send</button>
+                  </form>
+                </>
+              )}
             </>
           ) : (
             <div className="empty-state">
-              <p>Select an agent on the left to inspect its pane.</p>
+              <p>Select an agent on the left to open its chat.</p>
             </div>
           )}
         </section>
