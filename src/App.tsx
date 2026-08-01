@@ -20,7 +20,7 @@ const TABS: { id: TabId; label: string }[] = [
 ];
 
 function App() {
-  const [tab, setTab] = useState<TabId>("spaces");
+  const [tab, setTab] = useState<TabId>("chat");
 
   return (
     <main className="container">

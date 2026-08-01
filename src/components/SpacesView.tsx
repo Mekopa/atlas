@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
 import {
   listAgents,
@@ -27,6 +27,8 @@ export default function SpacesView() {
   const [output, setOutput] = useState("");
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
+  const selectedRef = useRef<Agent | null>(null);
+  selectedRef.current = selected;
 
   const refresh = useCallback(async () => {
     try {
@@ -36,6 +38,16 @@ export default function SpacesView() {
       setError("");
     } catch (e) {
       setError(String(e));
+    }
+    // Keep the selected pane live: re-read its output every poll.
+    const cur = selectedRef.current;
+    if (cur) {
+      try {
+        const text = await readPane(cur.pane_id);
+        setOutput(text);
+      } catch {
+        /* keep last output */
+      }
     }
   }, []);
 

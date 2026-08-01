@@ -3,20 +3,21 @@
 //
 // ACP is JSON-RPC over stdio, and a first-class chat backend *parallel* to the
 // herdr path. Where agentService.ts is the only herdr boundary, this file is the
-// only ACP boundary: it spawns an ACP-capable agent binary (claude-code,
-// gemini-cli, goose, codex), speaks the protocol via the official
+// only ACP boundary: it spawns an ACP-capable agent binary (opencode,
+// gemini-cli, claude-code, goose, codex), speaks the protocol via the official
 // @agentclientprotocol/sdk, and exposes a minimal prompt/reply surface to the UI.
 //
 // The UI never sees the SDK or the wire format — only Agent/ActiveChat below.
 
-import { ClientApp, ndJsonStream } from "@agentclientprotocol/sdk";
+import { ClientApp, methods, ndJsonStream } from "@agentclientprotocol/sdk";
 import { Command, type Child } from "@tauri-apps/plugin-shell";
 
 export interface AcpAgent {
   id: string;
   label: string;
+  /** Shell-scope name (resolves to the real binary via capabilities). */
   binary: string;
-  /** Extra argv, e.g. ["--acp"]. */
+  /** Extra argv, e.g. ["acp"]. */
   acpArgs: string[];
   available: boolean;
 }
@@ -35,6 +36,7 @@ export interface ActiveChat {
 }
 
 const AGENTS: Omit<AcpAgent, "available">[] = [
+  { id: "opencode", label: "OpenCode", binary: "opencode", acpArgs: ["acp"] },
   { id: "gemini", label: "Gemini CLI", binary: "gemini", acpArgs: ["--acp"] },
   { id: "claude", label: "Claude Code", binary: "claude", acpArgs: ["--acp"] },
   { id: "goose", label: "Goose", binary: "goose", acpArgs: ["--acp"] },
@@ -90,7 +92,7 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
     child = await command.spawn();
   } catch (e) {
     throw new Error(
-      `failed to spawn ${spec.binary} (${spec.label}): ${e}. Is it installed and allowed in capabilities?`,
+      `failed to spawn ${spec.label}: ${e}. Is it installed and allowed in capabilities?`,
     );
   }
 
@@ -139,6 +141,19 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
   }
 
   const ctx = connection.agent;
+  try {
+    await ctx.request(methods.agent.initialize, {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "Atlas", version: "0.1.0" },
+    });
+  } catch (e) {
+    releaseOut.forEach((f) => f());
+    connection.close();
+    await child.kill().catch(() => undefined);
+    throw new Error(`ACP initialize failed for ${spec.label}: ${e}`);
+  }
+
   const session = await ctx.buildSession(cwd).start();
 
   return {

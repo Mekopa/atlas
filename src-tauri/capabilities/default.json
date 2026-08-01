@@ -7,6 +7,36 @@
     "core:default",
     "opener:default",
     {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "gemini",
+          "cmd": "gemini",
+          "args": true
+        },
+        {
+          "name": "claude",
+          "cmd": "claude",
+          "args": true
+        },
+        {
+          "name": "goose",
+          "cmd": "goose",
+          "args": true
+        },
+        {
+          "name": "codex",
+          "cmd": "codex",
+          "args": true
+        },
+        {
+          "name": "opencode",
+          "cmd": "/Users/mekopa/.opencode/bin/opencode",
+          "args": true
+        }
+      ]
+    },
+    {
       "identifier": "shell:allow-spawn",
       "allow": [
         {
@@ -27,6 +57,11 @@
         {
           "name": "codex",
           "cmd": "codex",
+          "args": true
+        },
+        {
+          "name": "opencode",
+          "cmd": "/Users/mekopa/.opencode/bin/opencode",
           "args": true
         }
       ]
