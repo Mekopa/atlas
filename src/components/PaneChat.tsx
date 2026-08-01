@@ -1,19 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { readPane, sendToAgent } from "../lib/agentService";
-import { subscribeHerdr } from "../lib/herdrStore";
-
 // PaneChat — a chat interface over a RUNNING herdr pane.
 //
-// The pane's terminal output IS the actual conversation (full history,
-// realtime). Unlike a fresh ACP session (which starts empty), this shows the
-// pane's transcript immediately and keeps it live via herdr push events + a
-// light poll. Sending continues the SAME pane through herdr, so the GUI and
-// TUI stay in sync in realtime.
+// The pane's terminal output IS the actual conversation. This shows the pane's
+// transcript as clean PLAIN TEXT (ANSI stripped — no escape-code glitch, no
+// raw TUI rendering) and keeps it live via herdr push events + a light poll.
+// Sending continues the SAME pane through herdr, so GUI and TUI stay in sync.
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { readPaneText, sendToAgent } from "../lib/agentService";
+import { subscribeHerdr } from "../lib/herdrStore";
 
 interface Props {
   paneId: string;
   label: string;
-  workspaceId: string;
 }
 
 export default function PaneChat({ paneId, label }: Props) {
@@ -28,7 +26,7 @@ export default function PaneChat({ paneId, label }: Props) {
   const refresh = useCallback(async () => {
     const pid = paneRef.current;
     try {
-      const t = await readPane(pid);
+      const t = await readPaneText(pid);
       setText(t);
       setLoading(false);
     } catch {

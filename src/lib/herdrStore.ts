@@ -113,10 +113,10 @@ export function useHerdr() {
     refresh();
     subscribeHerdr({
       onRefresh: refresh,
-      onPane: (paneId) => {
-        // Caller reads output via fetchPane on demand; here we just mark a
-        // fresh revision so views re-render, and let the view decide.
-        if (alive) setSnapshot((s) => ({ ...s, rev: Date.now() + (paneId.length > 0 ? 1 : 0) }));
+      onPane: () => {
+        // Pane output is owned by the specific pane's view (PaneChat/Terminal),
+        // which subscribes to onPane itself. We must NOT bump snapshot.rev here
+        // — doing so re-rendered the whole hierarchy on every pane event.
       },
     }).then((u) => (unlisten = u));
 

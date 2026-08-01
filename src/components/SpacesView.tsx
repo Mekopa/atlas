@@ -48,7 +48,7 @@ export default function SpacesView() {
   useEffect(() => {
     if (!selected) return;
     readSelected();
-  }, [selected, readSelected, snapshot.rev]);
+  }, [selected, readSelected]);
 
   useEffect(() => {
     if (!selected) return;
@@ -174,7 +174,6 @@ export default function SpacesView() {
                   key={selected.pane_id}
                   paneId={selected.pane_id}
                   label={selected.agent}
-                  workspaceId={selected.workspace_id}
                 />
               ) : (
                 <>

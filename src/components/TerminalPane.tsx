@@ -62,10 +62,13 @@ export default function TerminalPane({ data }: Props) {
     if (!term) return;
 
     const prev = prevRef.current;
+    // herdr's read is a bounded viewport snapshot; once the pane scrolls the
+    // oldest lines drop off so it's not a strict prefix. Redraw the snapshot
+    // with a clear-screen (not reset(), which clears scrollback and flickers).
     if (data.length > prev.length && data.startsWith(prev)) {
       term.write(data.slice(prev.length));
     } else if (data !== prev) {
-      term.reset();
+      term.write("\x1b[2J\x1b[H");
       term.write(data);
     }
     prevRef.current = data;

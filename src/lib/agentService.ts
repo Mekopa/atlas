@@ -87,6 +87,22 @@ export async function readPane(paneId: string): Promise<string> {
   return result.read?.text ?? "";
 }
 
+/** Read the recent output of a pane as PLAIN TEXT (ANSI stripped) — for chat views. */
+export async function readPaneText(paneId: string): Promise<string> {
+  const result = (await herdr(
+    "agent",
+    "read",
+    paneId,
+    "--source",
+    "recent",
+    "--format",
+    "text",
+    "--lines",
+    "500",
+  )) as { read?: { text?: string } };
+  return result.read?.text ?? "";
+}
+
 /** Send text to an agent's pane and press Enter. */
 export async function sendToAgent(paneId: string, text: string): Promise<void> {
   await herdr("pane", "run", paneId, text);
