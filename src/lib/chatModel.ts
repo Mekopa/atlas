@@ -6,11 +6,56 @@
 
 export type MessageRole = "user" | "assistant" | "system";
 
+export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
+
+export type ToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "switch_mode"
+  | "other";
+
+export interface ToolCallLocation {
+  path: string;
+  line?: number;
+}
+
+export interface ToolCallDiff {
+  path: string;
+  oldText?: string;
+  newText: string;
+  deleted?: boolean;
+}
+
+export interface PlanEntry {
+  content: string;
+  priority?: string;
+  status?: string;
+}
+
 /** A single content part inside a message. */
 export type ChatPart =
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
-  | { kind: "tool-call"; name: string; callId: string; input: unknown; output?: string }
+  | {
+      kind: "tool-call";
+      callId: string;
+      name?: string;
+      title?: string;
+      toolKind?: ToolKind;
+      status?: ToolCallStatus;
+      input?: unknown;
+      output?: string;
+      locations?: ToolCallLocation[];
+      diffs?: ToolCallDiff[];
+    }
+  | { kind: "plan"; entries: PlanEntry[] }
+  | { kind: "usage"; used: number; size: number; cost?: { amount: number; currency: string } }
   | { kind: "step-start"; label?: string }
   | { kind: "step-finish"; reason?: string };
 

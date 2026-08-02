@@ -198,7 +198,11 @@ export default function SpacesView() {
                   ocLoading ? (
                     <div className="empty-state"><p>Resolving opencode session…</p></div>
                   ) : ocSessionId ? (
-                    <OpenCodeChat sessionId={ocSessionId} title={selected.agent} />
+                    <OpenCodeChat
+                      sessionId={ocSessionId}
+                      cwd={selected.cwd}
+                      title={selected.agent}
+                    />
                   ) : (
                     <PaneChat paneId={selected.pane_id} label={selected.agent} />
                   )

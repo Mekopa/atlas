@@ -1,48 +1,80 @@
-import { useEffect, useState } from "react";
-import { opencodeHistory } from "../../lib/opencodeHistory";
+import { useEffect, useRef, useState } from "react";
+import { loadAcpSession, type OpenAcpSession } from "../../lib/acpService";
 import type { ChatMessage, ChatSessionMeta } from "../../lib/chatModel";
 import ChatThread from "./ChatThread";
 import ChatInput from "./ChatInput";
 
-// OpenCodeChat — sample composition of the chat component library pieces:
-// backfills message history from opencode via the ChatHistorySource contract
-// and renders it with ChatThread + ChatInput. ACP streaming wiring comes next.
+// OpenCodeChat — the rich ACP chat for an existing opencode session.
+//
+// Opens the session via `session/load`, which REPLAYS the full conversation
+// (text + CoT reasoning + tool calls + plans + usage) as session/update
+// notifications. Everything normalizes into ChatMessage[] and renders with
+// the chat component library. Sending continues the SAME session via
+// session/prompt, streaming the live turn into the thread.
 
 interface Props {
   sessionId: string;
+  cwd: string;
   title?: string;
-  onSend?: (text: string) => Promise<void>;
 }
 
-export default function OpenCodeChat({ sessionId, title }: Props) {
+export default function OpenCodeChat({ sessionId, cwd, title }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sessionMeta, setSessionMeta] = useState<ChatSessionMeta | null>(null);
+  const [busy, setBusy] = useState(false);
+  const sessionRef = useRef<OpenAcpSession | null>(null);
 
   useEffect(() => {
     let alive = true;
+    let unsub: (() => void) | null = null;
     setLoading(true);
+    setError("");
     setMessages([]);
-    opencodeHistory
-      .getMessages(sessionId)
-      .then((msgs) => {
-        if (!alive) return;
-        setMessages(msgs);
+
+    loadAcpSession("opencode", sessionId, cwd)
+      .then((sess) => {
+        if (!alive) {
+          sess.close().catch(() => undefined);
+          return;
+        }
+        sessionRef.current = sess;
+        setMessages(sess.getMessages());
         setSessionMeta({
           sessionId,
           title: title ?? "session",
-          cwd: "",
+          cwd,
           updatedAt: Date.now(),
-          messageCount: msgs.length,
+          messageCount: sess.getMessages().length,
+        });
+        unsub = sess.onMessages(() => {
+          if (alive) setMessages([...sess.getMessages()]);
         });
       })
       .catch((e) => alive && setError(String(e)))
       .finally(() => alive && setLoading(false));
+
     return () => {
       alive = false;
+      unsub?.();
+      sessionRef.current?.close().catch(() => undefined);
+      sessionRef.current = null;
     };
-  }, [sessionId, title]);
+  }, [sessionId, cwd, title]);
+
+  async function send(text: string) {
+    const sess = sessionRef.current;
+    if (!sess || !text.trim() || busy) return;
+    setBusy(true);
+    try {
+      await sess.prompt(text.trim());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="view opencode-chat">
@@ -53,12 +85,12 @@ export default function OpenCodeChat({ sessionId, title }: Props) {
         </span>
       </div>
       {error && <div className="error-banner">{error}</div>}
-      <ChatThread messages={messages} loading={loading} emptyText="No messages in this session." />
-      <ChatInput
-        placeholder="send a message… (streaming coming next)"
-        disabled
-        onSend={() => {}}
+      <ChatThread
+        messages={messages}
+        loading={loading}
+        emptyText="No messages in this session."
       />
+      <ChatInput placeholder="send to opencode…" disabled={!sessionRef.current || busy} onSend={send} />
     </div>
   );
 }

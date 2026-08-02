@@ -11,6 +11,8 @@
 
 import { ClientApp, methods, ndJsonStream } from "@agentclientprotocol/sdk";
 import { Command, type Child } from "@tauri-apps/plugin-shell";
+import { StreamBuilder } from "./acpStream";
+import type { ChatMessage as ModelChatMessage } from "./chatModel";
 
 export interface AcpAgent {
   id: string;
@@ -81,8 +83,15 @@ export async function listAcpAgents(): Promise<AcpAgent[]> {
 /**
  * Spawns an ACP agent, connects, and initializes. Returns a handle with the
  * client context plus cleanup. The session stays open until close()/kill().
+ * `configureApp` (optional) runs after the ClientApp is created but before
+ * connect, so callers can register notification/request handlers (e.g. to
+ * capture the `session/update` stream during a `session/load` replay).
  */
-async function connectAgent(spec: (typeof AGENTS)[number], cwd: string) {
+async function connectAgent(
+  spec: (typeof AGENTS)[number],
+  cwd: string,
+  configureApp?: (app: ClientApp) => void,
+) {
   const command = Command.create(spec.binary, spec.acpArgs, {
     cwd,
     encoding: "raw",
@@ -142,6 +151,7 @@ async function connectAgent(spec: (typeof AGENTS)[number], cwd: string) {
 
   const stream = ndJsonStream(input, output);
   const app = new ClientApp({ name: "Atlas" });
+  configureApp?.(app);
 
   let connection: ReturnType<ClientApp["connect"]>;
   try {
@@ -169,6 +179,7 @@ async function connectAgent(spec: (typeof AGENTS)[number], cwd: string) {
   return {
     ctx,
     connection,
+    app,
     cleanup: () => releaseOut.forEach((f) => f()),
     kill: () => child.kill().catch(() => undefined),
     stderrTail: () => stderrTail,
@@ -225,6 +236,100 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
       return (
         resp.stopReason === "end_turn" ? textResult : `(stop: ${resp.stopReason})\n${textResult}`
       ).trim();
+    },
+    async close() {
+      cleanup();
+      connection.close();
+      await kill();
+    },
+  };
+}
+
+// --- Rich ACP session (replay + live stream) ------------------------------
+
+/**
+ * A connected ACP session that replays history and can be prompted live,
+ * normalizing the `session/update` stream into ChatMessage[].
+ */
+export interface OpenAcpSession {
+  agentId: string;
+  sessionId: string;
+  cwd: string;
+  /** Normalized messages from the replay (and appended to on live turns). */
+  getMessages(): ModelChatMessage[];
+  /** Subscribe to message changes. Returns an unsubscribe fn. */
+  onMessages(cb: () => void): () => void;
+  /** Sends a prompt on the same session; resolves when the turn ends. */
+  prompt(text: string): Promise<string>;
+  close(): Promise<void>;
+}
+
+/**
+ * Opens an existing ACP session (via `session/load`), captures the replayed
+ * `session/update` stream, and returns a handle that can continue the same
+ * session with `session/prompt`.
+ */
+export async function loadAcpSession(
+  agentId: string,
+  sessionId: string,
+  cwd: string,
+): Promise<OpenAcpSession> {
+  const spec = AGENTS.find((a) => a.id === agentId);
+  if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
+
+  const builder = new StreamBuilder();
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((cb) => cb());
+
+  const { ctx, connection, cleanup, kill } = await connectAgent(
+    spec,
+    cwd,
+    (app) => {
+      app.onNotification(
+        methods.client.session.update,
+        (c) => {
+          const update = c.params.update as {
+            sessionUpdate?: string;
+          } & Record<string, unknown>;
+          const changed = builder.apply(update as never);
+          if (changed) notify();
+        },
+      );
+    },
+  );
+
+  try {
+    await ctx.request(methods.agent.session.load, {
+      sessionId,
+      cwd,
+      mcpServers: [],
+    });
+    builder.finalize();
+    notify();
+  } catch (e) {
+    cleanup();
+    connection.close();
+    await kill();
+    throw new Error(`ACP load failed for ${spec.label} (${sessionId}): ${e}`);
+  }
+
+  return {
+    agentId,
+    sessionId,
+    cwd,
+    getMessages: () => builder.messages,
+    onMessages: (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    async prompt(text: string): Promise<string> {
+      const resp = (await ctx.request(methods.agent.session.prompt, {
+        sessionId,
+        prompt: [{ type: "text", text }],
+      })) as { stopReason?: string };
+      builder.finalize();
+      notify();
+      return resp.stopReason ?? "end_turn";
     },
     async close() {
       cleanup();
