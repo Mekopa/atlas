@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { loadAcpSession, type OpenAcpSession } from "../../lib/acpService";
+import {
+  loadAcpSession,
+  cancelOpenAcpSession,
+  type OpenAcpSession,
+} from "../../lib/acpService";
 import type { ChatMessage, ChatSessionMeta } from "../../lib/chatModel";
 import ChatThread from "./ChatThread";
 import ChatInput from "./ChatInput";
@@ -58,6 +62,9 @@ export default function OpenCodeChat({ sessionId, cwd, title }: Props) {
     return () => {
       alive = false;
       unsub?.();
+      // Kill any in-flight child even if loadAcpSession hasn't resolved yet
+      // (StrictMode double-mount, pane switches) — this was leaking processes.
+      cancelOpenAcpSession(sessionId);
       sessionRef.current?.close().catch(() => undefined);
       sessionRef.current = null;
     };
@@ -67,6 +74,18 @@ export default function OpenCodeChat({ sessionId, cwd, title }: Props) {
     const sess = sessionRef.current;
     if (!sess || !text.trim() || busy) return;
     setBusy(true);
+    // Optimistic append: opencode doesn't echo the user's message back on
+    // session/prompt, so render it immediately or the input "disappears".
+    setMessages((m) => [
+      ...m,
+      {
+        id: `user-${Date.now()}`,
+        sessionId,
+        role: "user",
+        ts: Date.now(),
+        parts: [{ kind: "text", text }],
+      },
+    ]);
     try {
       await sess.prompt(text.trim());
     } catch (e) {
@@ -84,12 +103,19 @@ export default function OpenCodeChat({ sessionId, cwd, title }: Props) {
           {sessionId.slice(0, 12)} · {sessionMeta?.messageCount ?? "?"} messages
         </span>
       </div>
-      {error && <div className="error-banner">{error}</div>}
-      <ChatThread
-        messages={messages}
-        loading={loading}
-        emptyText="No messages in this session."
-      />
+      {error && (
+        <div className="error-state">
+          <p>Failed to load session</p>
+          <pre>{error}</pre>
+        </div>
+      )}
+      {!error && (
+        <ChatThread
+          messages={messages}
+          loading={loading}
+          emptyText="No messages in this session."
+        />
+      )}
       <ChatInput placeholder="send to opencode…" disabled={!sessionRef.current || busy} onSend={send} />
     </div>
   );

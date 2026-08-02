@@ -86,11 +86,15 @@ export async function listAcpAgents(): Promise<AcpAgent[]> {
  * `configureApp` (optional) runs after the ClientApp is created but before
  * connect, so callers can register notification/request handlers (e.g. to
  * capture the `session/update` stream during a `session/load` replay).
+ * `onChild` (optional) fires the moment the child process is spawned, letting
+ * callers register a kill handle before connect/load completes (race-proof
+ * cancellation for StrictMode-style double mounts).
  */
 async function connectAgent(
   spec: (typeof AGENTS)[number],
   cwd: string,
   configureApp?: (app: ClientApp) => void,
+  onChild?: (kill: () => Promise<void>) => void,
 ) {
   const command = Command.create(spec.binary, spec.acpArgs, {
     cwd,
@@ -110,6 +114,7 @@ async function connectAgent(
       `failed to spawn ${spec.label}: ${e}. Is it installed and allowed in capabilities?`,
     );
   }
+  onChild?.(() => child.kill().catch(() => undefined));
 
   // Bridge the shell child (EventEmitter stdout + child.write) into the
   // WHATWG streams the ACP SDK expects. stdout carries newline-delimited JSON.
@@ -265,9 +270,35 @@ export interface OpenAcpSession {
 }
 
 /**
+ * Dedupes session opens: at most ONE ACP connection per session id. Rapid
+ * re-opens (React StrictMode double-mount, pane switches) reuse the live
+ * connection instead of spawning a second `opencode acp` — the second spawn
+ * both leaks a process AND contends for the same session, which made loads
+ * hang/empty and blocked the live update stream.
+ */
+const openSessions = new Map<string, OpenAcpSession>();
+
+/** In-flight opens, keyed by session id, so an unmount can kill the pending child. */
+const inFlightOpens = new Map<
+  string,
+  { kill: () => Promise<void>; cancelled: boolean }
+>();
+
+/** Aborts an in-flight open (kills its child) without awaiting completion. */
+export function cancelOpenAcpSession(sessionId: string): void {
+  const pending = inFlightOpens.get(sessionId);
+  if (pending) {
+    pending.cancelled = true;
+    void pending.kill();
+    inFlightOpens.delete(sessionId);
+  }
+}
+
+/**
  * Opens an existing ACP session (via `session/load`), captures the replayed
  * `session/update` stream, and returns a handle that can continue the same
- * session with `session/prompt`.
+ * session with `session/prompt`. Reuses an already-open connection for the
+ * same session id.
  */
 export async function loadAcpSession(
   agentId: string,
@@ -277,26 +308,65 @@ export async function loadAcpSession(
   const spec = AGENTS.find((a) => a.id === agentId);
   if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
 
+  const existing = openSessions.get(sessionId);
+  if (existing) return existing;
+
+  // Register the in-flight ref BEFORE connectAgent so an unmount can cancel
+  // even while the child is still spawning.
+  const inFlight: { kill: () => Promise<void>; cancelled: boolean } = {
+    kill: () => Promise.resolve(),
+    cancelled: false,
+  };
+  inFlightOpens.set(sessionId, inFlight);
+
   const builder = new StreamBuilder();
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((cb) => cb());
 
-  const { ctx, connection, cleanup, kill } = await connectAgent(
-    spec,
-    cwd,
-    (app) => {
-      app.onNotification(
-        methods.client.session.update,
-        (c) => {
-          const update = c.params.update as {
-            sessionUpdate?: string;
-          } & Record<string, unknown>;
-          const changed = builder.apply(update as never);
-          if (changed) notify();
-        },
-      );
-    },
-  );
+  let handle: Awaited<ReturnType<typeof connectAgent>>;
+  try {
+    handle = await connectAgent(
+      spec,
+      cwd,
+      (app) => {
+        app.onNotification(
+          methods.client.session.update,
+          (c) => {
+            const update = c.params.update as {
+              sessionUpdate?: string;
+            } & Record<string, unknown>;
+            const changed = builder.apply(update as never);
+            if (changed) notify();
+          },
+        );
+        // Agent asks the client to approve a tool call. Auto-allow-once so
+        // turns don't hang on an unanswered question (the pane is already
+        // configured to run agents non-interactively).
+        app.onRequest(methods.client.session.requestPermission, (c) => {
+          const options = (c.params.options ?? []) as Array<{
+            optionId?: string;
+            kind?: string;
+          }>;
+          const allow = options.find((o) => o.kind === "allow_once");
+          const fallback = options[0];
+          return {
+            outcome: {
+              outcome: "selected",
+              optionId: allow?.optionId ?? fallback?.optionId ?? "",
+            },
+          };
+        });
+      },
+      (kill) => {
+        inFlight.kill = kill;
+      },
+    );
+  } catch (e) {
+    inFlightOpens.delete(sessionId);
+    throw new Error(`ACP connect failed for ${spec.label} (${sessionId}): ${e}`);
+  }
+
+  const { ctx, connection, cleanup, kill } = handle;
 
   try {
     await ctx.request(methods.agent.session.load, {
@@ -304,16 +374,24 @@ export async function loadAcpSession(
       cwd,
       mcpServers: [],
     });
+    if (inFlight.cancelled) {
+      cleanup();
+      connection.close();
+      await kill();
+      throw new Error("ACP session open cancelled");
+    }
     builder.finalize();
     notify();
   } catch (e) {
+    inFlightOpens.delete(sessionId);
     cleanup();
     connection.close();
     await kill();
     throw new Error(`ACP load failed for ${spec.label} (${sessionId}): ${e}`);
   }
+  inFlightOpens.delete(sessionId);
 
-  return {
+  const session: OpenAcpSession = {
     agentId,
     sessionId,
     cwd,
@@ -332,9 +410,12 @@ export async function loadAcpSession(
       return resp.stopReason ?? "end_turn";
     },
     async close() {
+      openSessions.delete(sessionId);
       cleanup();
       connection.close();
       await kill();
     },
   };
+  openSessions.set(sessionId, session);
+  return session;
 }
