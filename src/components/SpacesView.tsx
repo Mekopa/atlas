@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TerminalPane from "./TerminalPane";
 import PaneChat from "./PaneChat";
+import OpenCodeChat from "./chat/OpenCodeChat";
 import { sendToAgent, type Agent, type Tab } from "../lib/agentService";
+import { listAcpSessions } from "../lib/acpService";
 import { useHerdr } from "../lib/herdrStore";
 
 // SpacesView — the SPACES tab (herdr-sync path). Shows herdr's structure layer
@@ -59,6 +61,28 @@ export default function SpacesView() {
   // Reset view mode to chat whenever a new agent is opened.
   useEffect(() => {
     setMode("chat");
+  }, [selected?.pane_id]);
+
+  // For opencode panes: resolve the most recent ACP session in the pane's cwd
+  // so the chat can backfill history via OpenCodeChat.
+  const [ocSessionId, setOcSessionId] = useState<string | null>(null);
+  const [ocLoading, setOcLoading] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setOcSessionId(null);
+    if (selected?.agent === "opencode" && selected.cwd) {
+      setOcLoading(true);
+      listAcpSessions("opencode", selected.cwd)
+        .then((sessions) => {
+          if (!alive) return;
+          if (sessions.length > 0) setOcSessionId(sessions[0].sessionId);
+        })
+        .catch(() => undefined)
+        .finally(() => alive && setOcLoading(false));
+    }
+    return () => {
+      alive = false;
+    };
   }, [selected?.pane_id]);
 
   async function runPrompt() {
@@ -170,11 +194,17 @@ export default function SpacesView() {
               </div>
 
               {mode === "chat" ? (
-                <PaneChat
-                  key={selected.pane_id}
-                  paneId={selected.pane_id}
-                  label={selected.agent}
-                />
+                selected.agent === "opencode" ? (
+                  ocLoading ? (
+                    <div className="empty-state"><p>Resolving opencode session…</p></div>
+                  ) : ocSessionId ? (
+                    <OpenCodeChat sessionId={ocSessionId} title={selected.agent} />
+                  ) : (
+                    <PaneChat paneId={selected.pane_id} label={selected.agent} />
+                  )
+                ) : (
+                  <PaneChat paneId={selected.pane_id} label={selected.agent} />
+                )
               ) : (
                 <>
                   <TerminalPane data={output} />

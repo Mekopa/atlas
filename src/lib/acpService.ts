@@ -79,13 +79,10 @@ export async function listAcpAgents(): Promise<AcpAgent[]> {
 }
 
 /**
- * Spawns an ACP agent and starts a chat session in `cwd`.
- * Returns a handle with prompt/close; the session stays open until close().
+ * Spawns an ACP agent, connects, and initializes. Returns a handle with the
+ * client context plus cleanup. The session stays open until close()/kill().
  */
-export async function startChat(agentId: string, cwd: string): Promise<ActiveChat> {
-  const spec = AGENTS.find((a) => a.id === agentId);
-  if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
-
+async function connectAgent(spec: (typeof AGENTS)[number], cwd: string) {
   const command = Command.create(spec.binary, spec.acpArgs, {
     cwd,
     encoding: "raw",
@@ -169,6 +166,53 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
     throw new Error(`ACP initialize failed for ${spec.label}: ${e}`);
   }
 
+  return {
+    ctx,
+    connection,
+    cleanup: () => releaseOut.forEach((f) => f()),
+    kill: () => child.kill().catch(() => undefined),
+    stderrTail: () => stderrTail,
+  };
+}
+
+/** A session summary from an ACP agent. */
+export interface AcpSessionSummary {
+  sessionId: string;
+  cwd: string;
+  title?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Lists past sessions for an ACP agent (short-lived connection).
+ */
+export async function listAcpSessions(
+  agentId: string,
+  cwd = "/Users/mekopa",
+): Promise<AcpSessionSummary[]> {
+  const spec = AGENTS.find((a) => a.id === agentId);
+  if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
+  const { ctx, cleanup, kill } = await connectAgent(spec, cwd);
+  try {
+    const res = (await ctx.request(methods.agent.session.list, {})) as {
+      sessions?: AcpSessionSummary[];
+    };
+    return res.sessions ?? [];
+  } finally {
+    cleanup();
+    await kill();
+  }
+}
+
+/**
+ * Spawns an ACP agent and starts a chat session in `cwd`.
+ * Returns a handle with prompt/close; the session stays open until close().
+ */
+export async function startChat(agentId: string, cwd: string): Promise<ActiveChat> {
+  const spec = AGENTS.find((a) => a.id === agentId);
+  if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
+
+  const { ctx, connection, cleanup, kill } = await connectAgent(spec, cwd);
   const session = await ctx.buildSession(cwd).start();
 
   return {
@@ -183,9 +227,9 @@ export async function startChat(agentId: string, cwd: string): Promise<ActiveCha
       ).trim();
     },
     async close() {
-      releaseOut.forEach((f) => f());
+      cleanup();
       connection.close();
-      await child.kill().catch(() => undefined);
+      await kill();
     },
   };
 }
